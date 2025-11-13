@@ -1,5 +1,7 @@
 import os
 import sys
+import argparse
+import logging
 from typing import List, Dict, Any
 from anthropic import Anthropic
 from pydantic import BaseModel
@@ -7,6 +9,17 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(message)s",
+    handlers=[logging.FileHandler("agent.log")],
+)
+
+# Suppress verbose HTTP logs
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class Tool(BaseModel):
@@ -216,12 +229,53 @@ class AIAgent:
                 return f"Error: {str(e)}"
 
 
-if __name__ == "__main__":
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+def main():
+    parser = argparse.ArgumentParser(
+        description="Osaka - A conversational AI agent with file editing capabilities"
+    )
+    parser.add_argument(
+        "--api-key", help="Anthropic API key (or set ANTHROPIC_API_KEY env var)"
+    )
+    args = parser.parse_args()
+
+    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("Error: ANTHROPIC_API_KEY not set")
+        print(
+            "Error: Please provide an API key via --api-key or ANTHROPIC_API_KEY environment variable"
+        )
         sys.exit(1)
+
     agent = AIAgent(api_key)
-    # Test chat
-    response = agent.chat("What files are in the current directory?")
-    print(response)
+
+    print("Osaka")
+    print("=================")
+    print("A conversational AI agent that can read, list, and edit files.")
+    print("Type 'exit' or 'quit' to end the conversation.")
+    print()
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+
+            if user_input.lower() in ["exit", "quit"]:
+                print("Goodbye!")
+                break
+
+            if not user_input:
+                continue
+
+            print("\nAssistant: ", end="", flush=True)
+            response = agent.chat(user_input)
+            print(response)
+            print()
+
+        except KeyboardInterrupt:
+            print("\n\nGoodbye!")
+            break
+        except Exception as e:
+            print(f"\nError: {str(e)}")
+            print()
+
+
+if __name__ == "__main__":
+    main()
