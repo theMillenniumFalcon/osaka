@@ -2,6 +2,8 @@ import os
 import sys
 import argparse
 import logging
+import shutil
+from datetime import datetime
 from typing import List, Dict, Any
 from anthropic import Anthropic
 from pydantic import BaseModel
@@ -33,8 +35,16 @@ class AIAgent:
         self.client = Anthropic(api_key=api_key)
         self.messages: List[Dict[str, Any]] = []
         self.tools: List[Tool] = []
+        self.backup_dir = ".osaka_backups"
+        self.edit_history: List[Dict[str, Any]] = []
+        self._setup_backup_directory()
         self._setup_tools()
         print(f"Agent initialized with {len(self.tools)} tools")
+
+    def _setup_backup_directory(self):
+        """Create backup directory if it doesn't exist"""
+        if not os.path.exists(self.backup_dir):
+            os.makedirs(self.backup_dir)
 
     def _setup_tools(self):
         self.tools = [
@@ -88,7 +98,27 @@ class AIAgent:
                     "required": ["path", "new_text"],
                 },
             ),
+            Tool(
+                name="undo_last_edit",
+                description="Undo the last file edit operation and restore the previous version",
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            ),
         ]
+
+    def _create_backup(self, path: str) -> str:
+        """Create a backup of a file before editing"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{os.path.basename(path)}_{timestamp}.backup"
+        backup_path = os.path.join(self.backup_dir, backup_name)
+        
+        if os.path.exists(path):
+            shutil.copy2(path, backup_path)
+            return backup_path
+        return None
 
     def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         try:
@@ -102,6 +132,8 @@ class AIAgent:
                     tool_input.get("old_text", ""),
                     tool_input["new_text"],
                 )
+            elif tool_name == "undo_last_edit":
+                return self._undo_last_edit()
             else:
                 return f"Unknown tool: {tool_name}"
         except Exception as e:
@@ -139,7 +171,11 @@ class AIAgent:
 
     def _edit_file(self, path: str, old_text: str, new_text: str) -> str:
         try:
-            if os.path.exists(path) and old_text:
+            # Create backup before editing
+            backup_path = self._create_backup(path)
+            file_existed = os.path.exists(path)
+            
+            if file_existed and old_text:
                 with open(path, "r", encoding="utf-8") as f:
                     content = f.read()
 
@@ -151,6 +187,14 @@ class AIAgent:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(content)
 
+                # Record edit in history
+                self.edit_history.append({
+                    "path": path,
+                    "backup_path": backup_path,
+                    "action": "edit",
+                    "timestamp": datetime.now()
+                })
+
                 return f"Successfully edited {path}"
             else:
                 # Only create directory if path contains subdirectories
@@ -161,9 +205,44 @@ class AIAgent:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(new_text)
 
+                # Record creation in history
+                self.edit_history.append({
+                    "path": path,
+                    "backup_path": backup_path,
+                    "action": "create",
+                    "timestamp": datetime.now()
+                })
+
                 return f"Successfully created {path}"
         except Exception as e:
             return f"Error editing file: {str(e)}"
+
+    def _undo_last_edit(self) -> str:
+        """Undo the last file edit operation"""
+        if not self.edit_history:
+            return "No edits to undo"
+
+        try:
+            last_edit = self.edit_history.pop()
+            path = last_edit["path"]
+            backup_path = last_edit["backup_path"]
+            action = last_edit["action"]
+
+            if action == "create":
+                # If file was created, delete it
+                if os.path.exists(path):
+                    os.remove(path)
+                return f"Undone: Removed newly created file {path}"
+            elif action == "edit":
+                # If file was edited, restore from backup
+                if backup_path and os.path.exists(backup_path):
+                    shutil.copy2(backup_path, path)
+                    return f"Undone: Restored {path} from backup"
+                else:
+                    return f"Error: Backup not found for {path}"
+
+        except Exception as e:
+            return f"Error undoing edit: {str(e)}"
 
     def chat(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
@@ -255,6 +334,7 @@ def main():
     print("=================")
     print("A conversational AI agent that can read, list, and edit files.")
     print("Type 'exit' or 'quit' to end the conversation.")
+    print("Type 'undo' to revert the last file change.")
     print()
 
     while True:

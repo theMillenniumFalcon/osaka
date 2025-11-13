@@ -80,3 +80,6 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# backups
+.osaka_backups
