@@ -162,6 +162,40 @@ class AIAgent:
                     "required": ["command"],
                 },
             ),
+            Tool(
+                name="multi_file_edit",
+                description="Edit multiple files at once by applying the same text replacement across all matching files. Useful for refactoring, renaming variables/functions, or updating imports.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "old_text": {
+                            "type": "string",
+                            "description": "The text to search for and replace in all files",
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "The text to replace old_text with",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "The directory path to search in (defaults to current directory)",
+                        },
+                        "file_pattern": {
+                            "type": "string",
+                            "description": "Optional file pattern to filter files (e.g., '*.py', '*.js')",
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Whether the search should be case-sensitive (defaults to true)",
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "If true, show what would be changed without actually modifying files (defaults to false)",
+                        },
+                    },
+                    "required": ["old_text", "new_text"],
+                },
+            ),
         ]
 
     def _create_backup(self, path: str) -> str:
@@ -202,6 +236,15 @@ class AIAgent:
                     tool_input["command"],
                     tool_input.get("working_directory", "."),
                     tool_input.get("timeout", 30),
+                )
+            elif tool_name == "multi_file_edit":
+                return self._multi_file_edit(
+                    tool_input["old_text"],
+                    tool_input["new_text"],
+                    tool_input.get("path", "."),
+                    tool_input.get("file_pattern"),
+                    tool_input.get("case_sensitive", True),
+                    tool_input.get("dry_run", False),
                 )
             else:
                 return f"Unknown tool: {tool_name}"
@@ -461,6 +504,116 @@ class AIAgent:
             return f"Command timed out after {timeout} seconds: {command}"
         except Exception as e:
             return f"Error running command: {str(e)}"
+
+    def _multi_file_edit(
+        self,
+        old_text: str,
+        new_text: str,
+        path: str = ".",
+        file_pattern: str = None,
+        case_sensitive: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Edit multiple files at once by replacing old_text with new_text"""
+        try:
+            if not os.path.exists(path):
+                return f"Path not found: {path}"
+
+            files_modified = []
+            files_with_matches = []
+            total_replacements = 0
+
+            # Walk through directory
+            for root, dirs, files in os.walk(path):
+                # Skip backup directory
+                if self.backup_dir in root:
+                    continue
+
+                # Skip hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                for filename in files:
+                    # Skip hidden files
+                    if filename.startswith('.'):
+                        continue
+
+                    # Apply file pattern filter if specified
+                    if file_pattern and not fnmatch.fnmatch(filename, file_pattern):
+                        continue
+
+                    filepath = os.path.join(root, filename)
+
+                    try:
+                        # Try to read as text file
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+
+                        # Check if old_text exists in file
+                        if case_sensitive:
+                            if old_text not in content:
+                                continue
+                            count = content.count(old_text)
+                        else:
+                            # Case-insensitive search
+                            if old_text.lower() not in content.lower():
+                                continue
+                            # Count occurrences (case-insensitive)
+                            count = content.lower().count(old_text.lower())
+
+                        files_with_matches.append((filepath, count))
+
+                        if not dry_run:
+                            # Create backup before editing
+                            backup_path = self._create_backup(filepath)
+
+                            # Perform replacement
+                            if case_sensitive:
+                                new_content = content.replace(old_text, new_text)
+                            else:
+                                # Case-insensitive replacement
+                                pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+                                new_content = pattern.sub(new_text, content)
+
+                            # Write modified content
+                            with open(filepath, 'w', encoding='utf-8') as f:
+                                f.write(new_content)
+
+                            # Record edit in history
+                            self.edit_history.append({
+                                "path": filepath,
+                                "backup_path": backup_path,
+                                "action": "edit",
+                                "timestamp": datetime.now(),
+                                "multi_file": True
+                            })
+
+                            files_modified.append(filepath)
+
+                        total_replacements += count
+
+                    except (UnicodeDecodeError, PermissionError):
+                        # Skip binary files or files we can't read
+                        continue
+
+            # Format results
+            if not files_with_matches:
+                return f"No files found containing '{old_text}'"
+
+            if dry_run:
+                output = [f"DRY RUN - Would modify {len(files_with_matches)} files with {total_replacements} total replacements:\n"]
+                for filepath, count in files_with_matches:
+                    output.append(f"  {filepath}: {count} replacement(s)")
+                output.append(f"\nRun without dry_run=true to apply these changes.")
+            else:
+                output = [f"Successfully modified {len(files_modified)} files with {total_replacements} total replacements:\n"]
+                for filepath in files_modified:
+                    output.append(f"  {filepath}")
+                output.append(f"\nNote: You can undo these changes using the undo command (reverts one file at a time).")
+
+            return "\n".join(output)
+
+        except Exception as e:
+            return f"Error in multi-file edit: {str(e)}"
 
     def chat(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
