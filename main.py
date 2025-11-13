@@ -182,6 +182,10 @@ class AIAgent:
                 response = self.client.messages.create(
                     model="claude-sonnet-4-5-20250929",
                     max_tokens=4096,
+                    system="You are a helpful coding assistant operating in a terminal environment. " \
+                    "Output only plain text without markdown formatting, as your responses appear directly in the terminal." \
+                    "Be concise but thorough, providing clear and practical advice with a friendly tone. " \
+                    "Don't use any asterisk characters in your responses.",
                     messages=self.messages,
                     tools=tool_schemas,
                 )
