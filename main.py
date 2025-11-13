@@ -152,6 +152,69 @@ class AIAgent:
         except Exception as e:
             return f"Error editing file: {str(e)}"
 
+    def chat(self, user_input: str) -> str:
+        self.messages.append({"role": "user", "content": user_input})
+
+        tool_schemas = [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+            for tool in self.tools
+        ]
+
+        while True:
+            try:
+                response = self.client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=4096,
+                    messages=self.messages,
+                    tools=tool_schemas,
+                )
+
+                assistant_message = {"role": "assistant", "content": []}
+
+                for content in response.content:
+                    if content.type == "text":
+                        assistant_message["content"].append(
+                            {
+                                "type": "text",
+                                "text": content.text,
+                            }
+                        )
+                    elif content.type == "tool_use":
+                        assistant_message["content"].append(
+                            {
+                                "type": "tool_use",
+                                "id": content.id,
+                                "name": content.name,
+                                "input": content.input,
+                            }
+                        )
+
+                self.messages.append(assistant_message)
+
+                tool_results = []
+                for content in response.content:
+                    if content.type == "tool_use":
+                        result = self._execute_tool(content.name, content.input)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": content.id,
+                                "content": result,
+                            }
+                        )
+
+                if tool_results:
+                    self.messages.append({"role": "user", "content": tool_results})
+                else:
+                    return response.content[0].text if response.content else ""
+
+            except Exception as e:
+                return f"Error: {str(e)}"
+
 
 if __name__ == "__main__":
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -159,5 +222,6 @@ if __name__ == "__main__":
         print("Error: ANTHROPIC_API_KEY not set")
         sys.exit(1)
     agent = AIAgent(api_key)
-    # Test the tools
-    print(agent._list_files("."))
+    # Test chat
+    response = agent.chat("What files are in the current directory?")
+    print(response)
