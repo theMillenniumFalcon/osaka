@@ -5,6 +5,7 @@ import logging
 import shutil
 import re
 import fnmatch
+import subprocess
 from datetime import datetime
 from typing import List, Dict, Any
 from anthropic import Anthropic
@@ -139,6 +140,28 @@ class AIAgent:
                     "required": ["pattern"],
                 },
             ),
+            Tool(
+                name="run_command",
+                description="Execute a shell command or run a script file. Use this to run programs, execute scripts, or perform system operations.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The command to execute (e.g., 'python script.py', 'ls -la', 'npm test')",
+                        },
+                        "working_directory": {
+                            "type": "string",
+                            "description": "The directory to run the command in (defaults to current directory)",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum time in seconds to wait for command completion (defaults to 30)",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            ),
         ]
 
     def _create_backup(self, path: str) -> str:
@@ -173,6 +196,12 @@ class AIAgent:
                     tool_input.get("file_pattern"),
                     tool_input.get("case_sensitive", False),
                     tool_input.get("use_regex", False),
+                )
+            elif tool_name == "run_command":
+                return self._run_command(
+                    tool_input["command"],
+                    tool_input.get("working_directory", "."),
+                    tool_input.get("timeout", 30),
                 )
             else:
                 return f"Unknown tool: {tool_name}"
@@ -379,6 +408,59 @@ class AIAgent:
 
         except Exception as e:
             return f"Error searching files: {str(e)}"
+
+    def _run_command(
+        self, command: str, working_directory: str = ".", timeout: int = 30
+    ) -> str:
+        """Execute a shell command and return its output"""
+        try:
+            if not os.path.exists(working_directory):
+                return f"Working directory not found: {working_directory}"
+
+            # Security check - block potentially dangerous commands
+            dangerous_patterns = [
+                r'\brm\s+-rf\s+/',  # rm -rf /
+                r'\bformat\b',       # Windows format
+                r'\bmkfs\b',         # make filesystem
+                r'\bdd\s+if=',       # disk destroyer
+                r'>\s*/dev/sd',      # writing to disk devices
+            ]
+            
+            for pattern in dangerous_patterns:
+                if re.search(pattern, command, re.IGNORECASE):
+                    return f"Command blocked for safety reasons: {command}"
+
+            # Run the command
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=working_directory,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+            # Format output
+            output_parts = []
+            
+            if result.stdout:
+                output_parts.append(f"Output:\n{result.stdout}")
+            
+            if result.stderr:
+                output_parts.append(f"Errors:\n{result.stderr}")
+            
+            if result.returncode != 0:
+                output_parts.append(f"Exit code: {result.returncode}")
+            
+            if not output_parts:
+                output_parts.append("Command completed successfully with no output")
+
+            return "\n\n".join(output_parts)
+
+        except subprocess.TimeoutExpired:
+            return f"Command timed out after {timeout} seconds: {command}"
+        except Exception as e:
+            return f"Error running command: {str(e)}"
 
     def chat(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
