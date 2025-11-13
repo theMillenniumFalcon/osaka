@@ -34,10 +34,18 @@ def main():
     # Initialize agent
     agent = AIAgent(api_key)
 
-    # Print welcome message
-    print("Osaka")
-    print("=================")
-    print("A conversational AI agent that can read, list, and edit files.")
+    # Print welcome message with colored ASCII art
+    print("\033[96m")  # Cyan color
+    print("""
+ ██████╗ ███████╗ █████╗ ██╗  ██╗ █████╗ 
+██╔═══██╗██╔════╝██╔══██╗██║ ██╔╝██╔══██╗
+██║   ██║███████╗███████║█████╔╝ ███████║
+██║   ██║╚════██║██╔══██║██╔═██╗ ██╔══██║
+╚██████╔╝███████║██║  ██║██║  ██╗██║  ██║
+ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
+""")
+    print("\033[0m", end="")  # Reset color
+    print("A conversational AI agent with file operations, search, batch editing, and command execution.")
     print("Type 'exit' or 'quit' to end the conversation.")
     print("Type 'undo' to revert the last file change.")
     print()
