@@ -3,6 +3,8 @@ import sys
 import argparse
 import logging
 import shutil
+import re
+import fnmatch
 from datetime import datetime
 from typing import List, Dict, Any
 from anthropic import Anthropic
@@ -107,6 +109,36 @@ class AIAgent:
                     "required": [],
                 },
             ),
+            Tool(
+                name="search_files",
+                description="Search for text patterns across multiple files in a directory. Supports regex patterns and file filtering.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "The text or regex pattern to search for",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "The directory path to search in (defaults to current directory)",
+                        },
+                        "file_pattern": {
+                            "type": "string",
+                            "description": "Optional file pattern to filter files (e.g., '*.py', '*.js')",
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Whether the search should be case-sensitive (defaults to false)",
+                        },
+                        "use_regex": {
+                            "type": "boolean",
+                            "description": "Whether to treat the pattern as a regex (defaults to false)",
+                        },
+                    },
+                    "required": ["pattern"],
+                },
+            ),
         ]
 
     def _create_backup(self, path: str) -> str:
@@ -134,6 +166,14 @@ class AIAgent:
                 )
             elif tool_name == "undo_last_edit":
                 return self._undo_last_edit()
+            elif tool_name == "search_files":
+                return self._search_files(
+                    tool_input["pattern"],
+                    tool_input.get("path", "."),
+                    tool_input.get("file_pattern"),
+                    tool_input.get("case_sensitive", False),
+                    tool_input.get("use_regex", False),
+                )
             else:
                 return f"Unknown tool: {tool_name}"
         except Exception as e:
@@ -243,6 +283,102 @@ class AIAgent:
 
         except Exception as e:
             return f"Error undoing edit: {str(e)}"
+
+    def _search_files(
+        self,
+        pattern: str,
+        path: str = ".",
+        file_pattern: str = None,
+        case_sensitive: bool = False,
+        use_regex: bool = False,
+    ) -> str:
+        """Search for text patterns across multiple files"""
+        try:
+            if not os.path.exists(path):
+                return f"Path not found: {path}"
+
+            results = []
+            total_matches = 0
+            files_searched = 0
+
+            # Compile regex pattern if needed
+            if use_regex:
+                try:
+                    flags = 0 if case_sensitive else re.IGNORECASE
+                    regex = re.compile(pattern, flags)
+                except re.error as e:
+                    return f"Invalid regex pattern: {str(e)}"
+            else:
+                # For plain text search
+                search_pattern = pattern if case_sensitive else pattern.lower()
+
+            # Walk through directory
+            for root, dirs, files in os.walk(path):
+                # Skip backup directory
+                if self.backup_dir in root:
+                    continue
+
+                # Skip hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                for filename in files:
+                    # Skip hidden files
+                    if filename.startswith('.'):
+                        continue
+
+                    # Apply file pattern filter if specified
+                    if file_pattern and not fnmatch.fnmatch(filename, file_pattern):
+                        continue
+
+                    filepath = os.path.join(root, filename)
+
+                    try:
+                        # Try to read as text file
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+
+                        files_searched += 1
+                        file_matches = []
+
+                        for line_num, line in enumerate(lines, 1):
+                            if use_regex:
+                                if regex.search(line):
+                                    file_matches.append((line_num, line.rstrip()))
+                                    total_matches += 1
+                            else:
+                                search_line = line if case_sensitive else line.lower()
+                                if search_pattern in search_line:
+                                    file_matches.append((line_num, line.rstrip()))
+                                    total_matches += 1
+
+                        if file_matches:
+                            results.append({
+                                'file': filepath,
+                                'matches': file_matches
+                            })
+
+                    except (UnicodeDecodeError, PermissionError):
+                        # Skip binary files or files we can't read
+                        continue
+
+            # Format results
+            if not results:
+                return f"No matches found for '{pattern}' in {files_searched} files"
+
+            output = [f"Found {total_matches} matches in {len(results)} files (searched {files_searched} files):\n"]
+
+            for result in results:
+                output.append(f"\n{result['file']}:")
+                for line_num, line in result['matches'][:5]:  # Show first 5 matches per file
+                    output.append(f"  Line {line_num}: {line}")
+                
+                if len(result['matches']) > 5:
+                    output.append(f"  ... and {len(result['matches']) - 5} more matches")
+
+            return "\n".join(output)
+
+        except Exception as e:
+            return f"Error searching files: {str(e)}"
 
     def chat(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
